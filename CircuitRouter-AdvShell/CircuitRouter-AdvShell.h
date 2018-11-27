@@ -7,9 +7,11 @@
 typedef struct {
     pid_t pid;
     int status;
+    double exec_time;
 } child_t;
 
-void waitForChild(vector_t *children);
-void printChildren(vector_t *children);
+void waitForChild();
+void printChildren();
+void signalHandler(int sig);
 
 #endif /* CIRCUITROUTER_SHELL_H */

@@ -20,16 +20,24 @@
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <errno.h>
+#include "lib/timer.h"
 
 #define COMMAND_EXIT "exit"
 #define COMMAND_RUN "run"
+#define ERROR_MSG "Command not supported."
 #define STDIN 0
 
 #define MAXARGS 3
 #define BUFFER_SIZE 100
 #define TAMCMD 100 /*size of command*/
 
-void waitForChild(vector_t *children) {
+TIMER_T startTime;
+TIMER_T stopTime;
+vector_t *children; /* global array of child processes*/
+int runningChildren = 0;
+
+void waitForChild() {
     while (1) {
         child_t *child = malloc(sizeof(child_t));
         if (child == NULL) {
@@ -39,8 +47,8 @@ void waitForChild(vector_t *children) {
         child->pid = wait(&(child->status));
         if (child->pid < 0) {
             if (errno == EINTR) {
-                /* Este codigo de erro significa que chegou signal que interrompeu a espera
-                   pela terminacao de filho; logo voltamos a esperar */
+                 // Este codigo de erro significa que chegou signal que interrompeu a espera
+                 //   pela terminacao de filho; logo voltamos a esperar 
                 free(child);
                 continue;
             } else {
@@ -53,20 +61,46 @@ void waitForChild(vector_t *children) {
     }
 }
 
-void printChildren(vector_t *children) {
+void printChildren() {
     for (int i = 0; i < vector_getSize(children); ++i) {
         child_t *child = vector_at(children, i);
         int status = child->status;
         pid_t pid = child->pid;
+        double exec_time = child->exec_time;
         if (pid != -1) {
             const char* ret = "NOK";
             if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
                 ret = "OK";
             }
-            printf("CHILD EXITED: (PID=%d; return %s)\n", pid, ret);
+            printf("CHILD EXITED: (PID=%d; return %s; %lf s )\n", pid, ret, exec_time);
         }
     }
     puts("END.");
+}
+
+void SignalHandler(int sig)
+{
+    child_t *child = malloc(sizeof(child_t));
+        if (child == NULL) {
+            perror("Error allocating memory");
+            exit(EXIT_FAILURE);
+        }
+        child->pid  = waitpid(-1, (&(child->status)), WNOHANG);
+        TIMER_READ(stopTime);
+        if (child->pid < 0) {
+            if (errno == EINTR) {
+                /* Este codigo de erro significa que chegou signal que interrompeu a espera
+                   pela terminacao de filho; logo voltamos a esperar */
+                free(child);
+                
+            } else {
+                perror("Unexpected error while waiting for child.");
+                exit (EXIT_FAILURE);
+            }
+        }
+        vector_pushBack(children, child);
+  child->exec_time= TIMER_DIFF_SECONDS(startTime, stopTime);
+  runningChildren--;
 }
 
 int main (int argc, char** argv) {
@@ -74,12 +108,14 @@ int main (int argc, char** argv) {
     char *args[MAXARGS + 1];
     char buffer[BUFFER_SIZE];
     int MAXCHILDREN = -1;
-    vector_t *children;
-    int runningChildren = 0;
+    
     char* text_buffer= (char*) malloc(sizeof(char)*100);
     fd_set fds;
     int rv;
     int maxfd;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = SignalHandler;
 
     
     if(argv[1] != NULL){
@@ -88,27 +124,37 @@ int main (int argc, char** argv) {
 
     children = vector_alloc(MAXCHILDREN);
     printf("Welcome to CircuitRouter-AdvShell\n");
-    if ((fAdv = open ("/tmp/CircuitRouter-AdvShell.pipe",O_RDONLY)) < 0) exit (-1); 
-    maxfd = (fAdv > STDIN)?fAdv:STDIN;
+    unlink("/tmp/CircuitRouter-AdvShell.pipe");
+    if (mkfifo ("/tmp/CircuitRouter-AdvShell.pipe", 0777) < 0) {
+        perror("Error: Making Fifo");
+        exit (1);
+    }
+    if ((fAdv = open ("/tmp/CircuitRouter-AdvShell.pipe",O_NONBLOCK)) < 0) exit (-1); 
+     
     while (1) {
         int numArgs;
         FD_ZERO(&fds);
-        FD_SET(fAdv, &fds); 
-        FD_SET(STDIN, &fds); 
+        FD_SET(STDIN, &fds);
+        FD_SET(fAdv, &fds);  
+        maxfd = (fAdv > STDIN)?fAdv:STDIN;  
         rv=select(maxfd+1, &fds, NULL, NULL, NULL); 
         if (rv < 0) {
-            printf("Select failed\r\n");
-            break;
-        }
+            if (errno == EINTR) {
+                continue;
+            }
+            else {
+                printf("Select failed\r\n");
+                break;
+            }
+        }   
 
         if (FD_ISSET(STDIN, &fds)) { 
-            read(fAdv, text_buffer, 100);
-            mode=1;
+            mode=1; 
 
         }
 
-        if (FD_ISSET(fAdv, &fds)) { 
-            printf("oi\n");
+        if (FD_ISSET(fAdv, &fds)) {
+            read(fAdv, text_buffer, 100);
             mode=2;
         }
         strcpy(buffer, text_buffer);
@@ -116,17 +162,24 @@ int main (int argc, char** argv) {
 
         /* EOF (end of file) do stdin ou comando "sair" */
         if (numArgs < 0 || (numArgs > 0 && (strcmp(args[0], COMMAND_EXIT) == 0))) {
+            if (mode==2) {
+                if ((fClient = open ("/tmp/CircuitRouter-Client.pipe",O_WRONLY)) < 0) exit (-1);
+                write(fClient, ERROR_MSG,23);
+                close(fClient);
+         }
+            else {
             printf("CircuitRouter-AdvShell will exit.\n--\n");
 
             /* Espera pela terminacao de cada filho */
             while (runningChildren > 0) {
-                waitForChild(children);
-                runningChildren --;
+                pause();
+                
             }
 
-            printChildren(children);
+            printChildren();
             printf("--\nCircuitRouter-AdvShell ended.\n");
             break;
+        }
         }
 
         else if (numArgs > 0 && strcmp(args[0], COMMAND_RUN) == 0){
@@ -136,11 +189,16 @@ int main (int argc, char** argv) {
                 continue;
             }
             if (MAXCHILDREN != -1 && runningChildren >= MAXCHILDREN) {
-                waitForChild(children);
-                runningChildren--;
+                pause();
+                
             }
-
+           // if (sigaction(SIGCHLD, &act, NULL) < 0) {
+            //perror ("sigaction");
+    //            return 1;
+   // }
+            sigaction(SIGCHLD, &sa, NULL);
             pid = fork();
+            TIMER_READ(startTime);
             if (pid < 0) {
                 perror("Failed to create new process.");
                 exit(EXIT_FAILURE);
@@ -148,12 +206,11 @@ int main (int argc, char** argv) {
 
             if (pid > 0) {
                 runningChildren++;
-                printf("%s: background child started with PID %d.\n\n", COMMAND_RUN, pid);
+                printf("%s: background child started with PID %d.\n", COMMAND_RUN, pid);
                 continue;
             } else {
                 char seqsolver[] = "../CircuitRouter-SeqSolver/CircuitRouter-SeqSolver";
                 char *newArgs[3] = {seqsolver, args[1], NULL};
-
                 execv(seqsolver, newArgs);
                 perror("Error while executing child process"); // Nao deveria chegar aqui
                 exit(EXIT_FAILURE);
@@ -172,7 +229,9 @@ int main (int argc, char** argv) {
     for (int i = 0; i < vector_getSize(children); i++) {
         free(vector_at(children, i));
     }
-    vector_free(children);
     close (fAdv);
+    unlink("/tmp/CircuitRouter-AdvShell.pipe");
+    vector_free(children);
+    free(text_buffer);
     return EXIT_SUCCESS;
 }

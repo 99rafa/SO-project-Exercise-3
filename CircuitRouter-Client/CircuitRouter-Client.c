@@ -14,13 +14,15 @@ int main (int argc, char** argv) {
 	char ext[6]=".pipe";
 	strcpy(pipename,argv[1]); /*argv[1]-pathname*/
     strcat(pipename, ext);
-     unlink(pipename)
+     unlink(pipename);
     if (mkfifo (pipename, 0777) < 0) {
     	perror("Error: Making Fifo")
     	exit (1);
+    }
     if ((fAdv = open (pipename,O_WRONLY)) < 0) exit (-1);
 	while (1) {
 		fgets(text_buffer, 100, stdin);
+		printf("%s\n", text_buffer);
 		write(fAdv, text_buffer, TAMCMD);
 	}
 	close(fAdv); 

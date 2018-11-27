@@ -24,6 +24,6 @@ Return value:
  The number of arguments that were read, or -1 if some error occurred.
 */
 
-int readLineArguments(char **argVector, int vectorSize, char *buffer, int bufferSize);
+int readLineArguments(char **argVector, int vectorSize, char *buffer, int bufferSize, int mode);
 
 #endif
