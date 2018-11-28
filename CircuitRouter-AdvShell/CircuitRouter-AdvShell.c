@@ -21,7 +21,8 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
-#include "lib/timer.h"
+#include <pthread.h>
+
 
 #define COMMAND_EXIT "exit"
 #define COMMAND_RUN "run"
@@ -32,10 +33,10 @@
 #define BUFFER_SIZE 100
 #define TAMCMD 100 /*size of command*/
 
-TIMER_T startTime;
-TIMER_T stopTime;
 vector_t *children; /* global array of child processes*/
 int runningChildren = 0;
+
+
 
 void waitForChild() {
     while (1) {
@@ -72,21 +73,22 @@ void printChildren() {
             if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
                 ret = "OK";
             }
-            printf("CHILD EXITED: (PID=%d; return %s; %lf s )\n", pid, ret, exec_time);
+            printf("CHILD EXITED: (PID=%d; return %s; %.0lf s )\n", pid, ret, exec_time);
         }
     }
     puts("END.");
 }
 
-void SignalHandler(int sig)
+void SignalHandler(int sig, siginfo_t *info, void *ucontext)
 {
-    child_t *child = malloc(sizeof(child_t));
+
+     child_t *child = malloc(sizeof(child_t));
         if (child == NULL) {
             perror("Error allocating memory");
             exit(EXIT_FAILURE);
         }
+
         child->pid  = waitpid(-1, (&(child->status)), WNOHANG);
-        TIMER_READ(stopTime);
         if (child->pid < 0) {
             if (errno == EINTR) {
                 /* Este codigo de erro significa que chegou signal que interrompeu a espera
@@ -99,8 +101,8 @@ void SignalHandler(int sig)
             }
         }
        vector_pushBack(children, child);
-  child->exec_time= TIMER_DIFF_SECONDS(startTime, stopTime);
-  runningChildren--;
+      child->exec_time= (info->si_utime)/100;
+      runningChildren--;
 }
 
 int main (int argc, char** argv) {
@@ -115,7 +117,8 @@ int main (int argc, char** argv) {
     int maxfd;
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = SignalHandler;
+    sa.sa_sigaction = SignalHandler;
+    sa.sa_flags=SA_SIGINFO;
 
     
     if(argv[1] != NULL){
@@ -191,10 +194,12 @@ int main (int argc, char** argv) {
         else if (numArgs > 0 && strcmp(args[0], COMMAND_RUN) == 0){
             int pid;
             if (numArgs < 2) {
+                if (mode==2) {
                 if ((fClient = open (client_pipename,O_WRONLY)) < 0) exit (-1);
                 write(fClient, ERROR_MSG,23);
-                printf("%s: invalid syntax. Try again.\n", COMMAND_RUN);
                 close(fClient);
+            }
+                printf("%s: invalid syntax. Try again.\n", COMMAND_RUN);
                 continue;
             }
             if (MAXCHILDREN != -1 && runningChildren >= MAXCHILDREN) {
@@ -205,9 +210,8 @@ int main (int argc, char** argv) {
                 perror("sigaction");
                 exit(1);
             }
-        
+
             pid = fork();
-            TIMER_READ(startTime);
             if (pid < 0) {
                 perror("Failed to create new process.");
                 exit(EXIT_FAILURE);
@@ -232,10 +236,12 @@ int main (int argc, char** argv) {
             continue;
         }
         else {
+            if (mode==2) {
             if ((fClient = open (client_pipename,O_WRONLY)) < 0) exit (-1);
             write(fClient, ERROR_MSG,23);
-            printf("Unknown command. Try again.\n");
             close(fClient);
+        }
+        printf("Unknown command. Try again.\n");
         }
     }
 
