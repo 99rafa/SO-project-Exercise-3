@@ -13,21 +13,26 @@
 
 int main (int argc, char** argv) {
 	int fAdv, fClient;
-	char* pipename= (char*) malloc(sizeof(char)*100);
+	char* server_pipename= (char*) malloc(sizeof(char)*100);
 	char* text_buffer= (char*) malloc(sizeof(char)*100);
-	char ext[6]=".pipe";
-	strcpy(pipename,argv[1]); /*argv[1]-pathname*/
-    strcat(pipename, ext);
+	pid_t pid = getpid();
+    char string_pid[6];
+    sprintf(string_pid, "%d", pid);
+	char ext[6]=".pipe", client_pipename[50] = "/tmp/CircuitRouter-Client";
+	strcat(client_pipename, string_pid);
+	strcat(client_pipename, ext);
+	strcpy(server_pipename,argv[1]); /*argv[1]-pathname*/
+    strcat(server_pipename, ext);
     fd_set fds;
     int rv;
     int maxfd;
-    unlink("/tmp/CircuitRouter-Client.pipe");
-    if (mkfifo ("/tmp/CircuitRouter-Client.pipe", 0777) < 0) {
+    unlink(client_pipename);
+    if (mkfifo (client_pipename, 0777) < 0) {
         perror("Error: Making Fifo");
         exit (1);
     }
-    if ((fAdv = open (pipename,O_WRONLY)) < 0) exit (-1);
-    if ((fClient = open ("/tmp/CircuitRouter-Client.pipe",O_NONBLOCK)) < 0) exit (-1);
+    if ((fAdv = open (server_pipename,O_WRONLY)) < 0) exit (-1);
+    if ((fClient = open (client_pipename,O_NONBLOCK)) < 0) exit (-1);
 	while (1) {
 		FD_ZERO(&fds);
         FD_SET(STDIN, &fds);
@@ -46,19 +51,21 @@ int main (int argc, char** argv) {
 
         if (FD_ISSET(STDIN, &fds)) { 
             fgets(text_buffer, 100, stdin);
+            write(fAdv, client_pipename, 50);
 			write(fAdv, text_buffer, TAMCMD);
 
         }
         if (FD_ISSET(fClient, &fds)) { 
-            read(fClient,text_buffer, 100);
+            if(read(fClient,text_buffer, 100)>0) {
             printf("%s\n", text_buffer);
+           }
         }
 
 		
 	}
 	close(fClient); 
-	unlink("/tmp/CircuitRouter-Client.pipe");
+	unlink(client_pipename);
 	free(text_buffer);
-	free(pipename);
+	free(server_pipename);
 	exit(0);
 }

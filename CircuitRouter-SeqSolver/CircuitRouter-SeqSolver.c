@@ -64,6 +64,8 @@
 #include "lib/timer.h"
 #include "lib/types.h"
 
+#define SUCCESS_MSG "Circuit Solved."
+
 enum param_types {
     PARAM_BENDCOST = (unsigned char)'b',
     PARAM_XCOST    = (unsigned char)'x',
@@ -78,9 +80,14 @@ enum param_defaults {
     PARAM_DEFAULT_ZCOST    = 2,
 };
 
+
+
 bool_t global_doPrint = TRUE;
 char* global_inputFile = NULL;
+char global_pipename[40] = "/tmp/CircuitRouter-Client.pipe"; 
+int execution_mode=1;
 long global_params[256]; /* 256 = ascii limit */
+
 
 
 /* =============================================================================
@@ -144,6 +151,10 @@ static void parseArgs (long argc, char* const argv[]){
     }
 
     global_inputFile = argv[optind];
+    if (argv[optind+1]!= NULL && argv[optind+2] != NULL) {
+        strcpy(global_pipename ,argv[optind+1]);
+        execution_mode =  atoi(argv[optind+2]);
+}
 }
 
 /* =============================================================================
@@ -181,6 +192,7 @@ int main(int argc, char** argv){
     /*
      * Initialization
      */
+    int fClient;
     parseArgs(argc, argv);
     FILE* resultFp = outputFile();
     maze_t* mazePtr = maze_alloc();
@@ -236,8 +248,12 @@ int main(int argc, char** argv){
         vector_free(pathVectorPtr);
     }
     list_free(pathVectorListPtr);
-
     fclose(resultFp);
+    if (execution_mode ==2) {
+        if ((fClient = open (global_pipename,O_WRONLY)) < 0) exit (-1);
+        write(fClient, SUCCESS_MSG,16);
+        close(fClient);
+    }
     exit(0);
 }
 

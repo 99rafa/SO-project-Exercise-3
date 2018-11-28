@@ -98,7 +98,7 @@ void SignalHandler(int sig)
                 exit (EXIT_FAILURE);
             }
         }
-        vector_pushBack(children, child);
+       vector_pushBack(children, child);
   child->exec_time= TIMER_DIFF_SECONDS(startTime, stopTime);
   runningChildren--;
 }
@@ -107,8 +107,8 @@ int main (int argc, char** argv) {
     int fAdv, fClient, mode=0;
     char *args[MAXARGS + 1];
     char buffer[BUFFER_SIZE];
+    char string_mode[10], client_pipename[50];
     int MAXCHILDREN = -1;
-    
     char* text_buffer= (char*) malloc(sizeof(char)*100);
     fd_set fds;
     int rv;
@@ -135,9 +135,10 @@ int main (int argc, char** argv) {
         int numArgs;
         FD_ZERO(&fds);
         FD_SET(STDIN, &fds);
-        FD_SET(fAdv, &fds);  
+        FD_SET(fAdv, &fds); 
         maxfd = (fAdv > STDIN)?fAdv:STDIN;  
         rv=select(maxfd+1, &fds, NULL, NULL, NULL); 
+
         if (rv < 0) {
             if (errno == EINTR) {
                 continue;
@@ -154,8 +155,11 @@ int main (int argc, char** argv) {
         }
 
         if (FD_ISSET(fAdv, &fds)) {
-            read(fAdv, text_buffer, 100);
-            mode=2;
+            if(read(fAdv, client_pipename,50)>0){
+                 if(read(fAdv, text_buffer, 100)>0) {
+                    mode=2;
+                }
+            }
         }
         strcpy(buffer, text_buffer);
         numArgs = readLineArguments(args, MAXARGS+1, buffer, BUFFER_SIZE,mode);
@@ -163,9 +167,11 @@ int main (int argc, char** argv) {
         /* EOF (end of file) do stdin ou comando "sair" */
         if (numArgs < 0 || (numArgs > 0 && (strcmp(args[0], COMMAND_EXIT) == 0))) {
             if (mode==2) {
-                if ((fClient = open ("/tmp/CircuitRouter-Client.pipe",O_WRONLY)) < 0) exit (-1);
+                if ((fClient = open (client_pipename,O_WRONLY)) < 0) exit (-1);
                 write(fClient, ERROR_MSG,23);
                 close(fClient);
+                printf("Unknown command. Try again.\n");
+
          }
             else {
             printf("CircuitRouter-AdvShell will exit.\n--\n");
@@ -185,18 +191,21 @@ int main (int argc, char** argv) {
         else if (numArgs > 0 && strcmp(args[0], COMMAND_RUN) == 0){
             int pid;
             if (numArgs < 2) {
+                if ((fClient = open (client_pipename,O_WRONLY)) < 0) exit (-1);
+                write(fClient, ERROR_MSG,23);
                 printf("%s: invalid syntax. Try again.\n", COMMAND_RUN);
+                close(fClient);
                 continue;
             }
             if (MAXCHILDREN != -1 && runningChildren >= MAXCHILDREN) {
                 pause();
                 
             }
-           // if (sigaction(SIGCHLD, &act, NULL) < 0) {
-            //perror ("sigaction");
-    //            return 1;
-   // }
-            sigaction(SIGCHLD, &sa, NULL);
+            if(sigaction(SIGCHLD, &sa, NULL)<0) {
+                perror("sigaction");
+                exit(1);
+            }
+        
             pid = fork();
             TIMER_READ(startTime);
             if (pid < 0) {
@@ -209,8 +218,9 @@ int main (int argc, char** argv) {
                 printf("%s: background child started with PID %d.\n", COMMAND_RUN, pid);
                 continue;
             } else {
+                sprintf(string_mode, "%d", mode);
                 char seqsolver[] = "../CircuitRouter-SeqSolver/CircuitRouter-SeqSolver";
-                char *newArgs[3] = {seqsolver, args[1], NULL};
+                char *newArgs[5] = {seqsolver, args[1], client_pipename, string_mode,NULL};
                 execv(seqsolver, newArgs);
                 perror("Error while executing child process"); // Nao deveria chegar aqui
                 exit(EXIT_FAILURE);
@@ -221,9 +231,12 @@ int main (int argc, char** argv) {
             /* Nenhum argumento; ignora e volta a pedir */
             continue;
         }
-        else
+        else {
+            if ((fClient = open (client_pipename,O_WRONLY)) < 0) exit (-1);
+            write(fClient, ERROR_MSG,23);
             printf("Unknown command. Try again.\n");
-
+            close(fClient);
+        }
     }
 
     for (int i = 0; i < vector_getSize(children); i++) {
