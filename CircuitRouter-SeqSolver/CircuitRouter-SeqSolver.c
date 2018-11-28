@@ -197,7 +197,7 @@ int main(int argc, char** argv){
     FILE* resultFp = outputFile();
     maze_t* mazePtr = maze_alloc();
     assert(mazePtr);
-    long numPathToRoute = maze_read(mazePtr, global_inputFile, resultFp);
+    long numPathToRoute = maze_read(mazePtr, global_inputFile, resultFp, global_pipename, execution_mode);
     router_t* routerPtr = router_alloc(global_params[PARAM_XCOST],
                                        global_params[PARAM_YCOST],
                                        global_params[PARAM_ZCOST],

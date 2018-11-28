@@ -62,7 +62,11 @@
 #include "lib/pair.h"
 #include "lib/types.h"
 #include "lib/vector.h"
+#include <fcntl.h>
+#include <unistd.h>
 
+
+#define ERROR_MSG "Command not supported."
 
 /* =============================================================================
  * maze_alloc
@@ -150,11 +154,18 @@ static void addToGrid (grid_t* gridPtr, vector_t* vectorPtr, char* type){
  * =============================================================================
  */
 
-long maze_read (maze_t* mazePtr, char * input, FILE * fp){
+long maze_read (maze_t* mazePtr, char * input, FILE * fp, char* client_pipename, int execution_mode){
+    int fClient;
     FILE* inputFile;
     inputFile = fopen(input,"rt");
     if(!inputFile){
         fprintf(stderr, "Error: Could not read %s\n", input);
+        if (execution_mode==2) {
+            printf("oi\n");
+            if ((fClient = open (client_pipename,O_WRONLY)) < 0) exit (-1);
+                    write(fClient, ERROR_MSG,23);
+                    close(fClient);
+        }
         exit(EXIT_FAILURE);
     }
     /*

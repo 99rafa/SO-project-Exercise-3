@@ -21,7 +21,8 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <pthread.h>
+#include <math.h>
+
 
 
 #define COMMAND_EXIT "exit"
@@ -73,13 +74,13 @@ void printChildren() {
             if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
                 ret = "OK";
             }
-            printf("CHILD EXITED: (PID=%d; return %s; %.0lf s )\n", pid, ret, exec_time);
+            printf("CHILD EXITED: (PID=%d; return %s; %.0f s )\n", pid, ret, exec_time/100);
         }
     }
     puts("END.");
 }
 
-void SignalHandler(int sig, siginfo_t *info, void *ucontext)
+void childHandler(int sig, siginfo_t *info, void *ucontext)
 {
 
      child_t *child = malloc(sizeof(child_t));
@@ -100,10 +101,19 @@ void SignalHandler(int sig, siginfo_t *info, void *ucontext)
                 exit (EXIT_FAILURE);
             }
         }
-       vector_pushBack(children, child);
-      child->exec_time= (info->si_utime)/100;
-      runningChildren--;
+        vector_pushBack(children, child);
+        child->exec_time= (info->si_utime);  // it is in hundreads of a second
+        runningChildren--;
 }
+
+void Handle_CTRLC(int sig) {
+    if (unlink("/tmp/CircuitRouter-AdvShell.pipe")==-1) {
+        perror("Unexpected error while unlinking named pipe");
+        exit(EXIT_FAILURE);
+    }
+    exit(0);
+}
+
 
 int main (int argc, char** argv) {
     int fAdv, fClient, mode=0;
@@ -117,7 +127,7 @@ int main (int argc, char** argv) {
     int maxfd;
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_sigaction = SignalHandler;
+    sa.sa_sigaction = childHandler;
     sa.sa_flags=SA_SIGINFO;
 
     
@@ -127,19 +137,21 @@ int main (int argc, char** argv) {
 
     children = vector_alloc(MAXCHILDREN);
     printf("Welcome to CircuitRouter-AdvShell\n");
-    unlink("/tmp/CircuitRouter-AdvShell.pipe");
-    if (mkfifo ("/tmp/CircuitRouter-AdvShell.pipe", 0777) < 0) {
+    if (mkfifo ("/tmp/CircuitRouter-AdvShell.pipe", 0777) == -1) {
         perror("Error: Making Fifo");
         exit (1);
     }
-    if ((fAdv = open ("/tmp/CircuitRouter-AdvShell.pipe",O_NONBLOCK)) < 0) exit (-1); 
-     
+    if ((fAdv = open ("/tmp/CircuitRouter-AdvShell.pipe",O_RDONLY |O_NONBLOCK)) == -1){
+        perror("Unexpected error while opening named pipe");
+        exit (-1); 
+    }
     while (1) {
         int numArgs;
         FD_ZERO(&fds);
         FD_SET(STDIN, &fds);
         FD_SET(fAdv, &fds); 
         maxfd = (fAdv > STDIN)?fAdv:STDIN;  
+        signal(SIGINT,Handle_CTRLC);
         rv=select(maxfd+1, &fds, NULL, NULL, NULL); 
 
         if (rv < 0) {
@@ -147,7 +159,7 @@ int main (int argc, char** argv) {
                 continue;
             }
             else {
-                printf("Select failed\r\n");
+                perror("Select failed\r\n");
                 break;
             }
         }   
@@ -158,11 +170,25 @@ int main (int argc, char** argv) {
         }
 
         if (FD_ISSET(fAdv, &fds)) {
-            if(read(fAdv, client_pipename,50)>0){
-                 if(read(fAdv, text_buffer, 100)>0) {
+            int rd=read(fAdv, client_pipename,50);
+            if(rd > 0 ){
+                int rd2= read(fAdv, text_buffer, 100);
+                 if(rd2 > 0) {
                     mode=2;
                 }
-            }
+                else if (rd2 == -1) {
+                   if (errno !=EWOULDBLOCK) {
+                    perror("Unexpected error while reading from named pipe");
+                    exit(-1);
+                   }
+                }
+            else if(rd ==-1 ) {
+                if (errno !=EWOULDBLOCK) {
+                    perror("Unexpected error while reading from named pipe");
+                    exit(-1);
+                   }
+                }
+        }
         }
         strcpy(buffer, text_buffer);
         numArgs = readLineArguments(args, MAXARGS+1, buffer, BUFFER_SIZE,mode);
@@ -170,35 +196,49 @@ int main (int argc, char** argv) {
         /* EOF (end of file) do stdin ou comando "sair" */
         if (numArgs < 0 || (numArgs > 0 && (strcmp(args[0], COMMAND_EXIT) == 0))) {
             if (mode==2) {
-                if ((fClient = open (client_pipename,O_WRONLY)) < 0) exit (-1);
-                write(fClient, ERROR_MSG,23);
-                close(fClient);
+                if ((fClient = open (client_pipename,O_WRONLY)) == -1) {
+                    perror("Unexpected error while opening named pipe");
+                    exit (-1); 
+                }
+                if (write(fClient, ERROR_MSG,23) == -1) {
+                    perror("Unexpected error while writing in named pipe");
+                    exit (-1);
+                }
+                if (close(fClient) == -1) {
+                    perror("Unexpected error while closing named pipe");
+                    exit (-1);
+                    }
                 printf("Unknown command. Try again.\n");
-
-         }
+            }
             else {
             printf("CircuitRouter-AdvShell will exit.\n--\n");
 
             /* Espera pela terminacao de cada filho */
             while (runningChildren > 0) {
-                pause();
-                
+                pause(); 
             }
-
             printChildren();
             printf("--\nCircuitRouter-AdvShell ended.\n");
             break;
         }
-        }
-
+    }
         else if (numArgs > 0 && strcmp(args[0], COMMAND_RUN) == 0){
             int pid;
             if (numArgs < 2) {
                 if (mode==2) {
-                if ((fClient = open (client_pipename,O_WRONLY)) < 0) exit (-1);
-                write(fClient, ERROR_MSG,23);
-                close(fClient);
-            }
+                    if ((fClient = open (client_pipename,O_WRONLY)) == -1) {
+                        perror("Unexpected error while opening named pipe");
+                        exit (-1); 
+                    }
+                    if (write(fClient, ERROR_MSG,23) == -1) {
+                        perror("Unexpected error while writing in named pipe");
+                        exit (-1);
+                    }
+                    if (close(fClient) == -1) {
+                        perror("Unexpected error while closing named pipe");
+                        exit (-1);
+                    }
+                }
                 printf("%s: invalid syntax. Try again.\n", COMMAND_RUN);
                 continue;
             }
@@ -206,8 +246,8 @@ int main (int argc, char** argv) {
                 pause();
                 
             }
-            if(sigaction(SIGCHLD, &sa, NULL)<0) {
-                perror("sigaction");
+            if(sigaction(SIGCHLD, &sa, NULL) == -1) {
+                perror("Unexpected error while executing sigaction");
                 exit(1);
             }
 
@@ -230,6 +270,7 @@ int main (int argc, char** argv) {
                 exit(EXIT_FAILURE);
             }
         }
+    
 
         else if (numArgs == 0){
             /* Nenhum argumento; ignora e volta a pedir */
@@ -237,20 +278,35 @@ int main (int argc, char** argv) {
         }
         else {
             if (mode==2) {
-            if ((fClient = open (client_pipename,O_WRONLY)) < 0) exit (-1);
-            write(fClient, ERROR_MSG,23);
-            close(fClient);
+                if ((fClient = open (client_pipename,O_WRONLY)) == -1) {
+                        perror("Unexpected error while opening named pipe");
+                        exit (-1); 
+                    }
+                    if (write(fClient, ERROR_MSG,23) == -1) {
+                        perror("Unexpected error while writing in named pipe");
+                        exit (-1);
+                    }
+                    if (close(fClient) == -1) {
+                        perror("Unexpected error while closing named pipe");
+                        exit (-1);
+                    }
         }
         printf("Unknown command. Try again.\n");
         }
     }
-
     for (int i = 0; i < vector_getSize(children); i++) {
         free(vector_at(children, i));
     }
-    close (fAdv);
-    unlink("/tmp/CircuitRouter-AdvShell.pipe");
+    if (close (fAdv) == -1) {
+        perror("Unexpected error while closing named pipe");
+        exit(-1);
+    }
+    if (unlink("/tmp/CircuitRouter-AdvShell.pipe")==-1) {
+        perror("Unexpected error while unlinking named pipe");
+        exit(EXIT_FAILURE);
+    }
     vector_free(children);
     free(text_buffer);
     return EXIT_SUCCESS;
+
 }

@@ -11,6 +11,8 @@
 #define TAMCMD 100 /*size of command*/
 #define STDIN 0
 
+
+
 int main (int argc, char** argv) {
 	int fAdv, fClient;
 	char* server_pipename= (char*) malloc(sizeof(char)*100);
@@ -25,14 +27,19 @@ int main (int argc, char** argv) {
     strcat(server_pipename, ext);
     fd_set fds;
     int rv;
-    int maxfd;
-    unlink(client_pipename);
-    if (mkfifo (client_pipename, 0777) < 0) {
+    int maxfd;     /*There is no need to unlink the pipe given all the client pipes have different names */
+    if (mkfifo (client_pipename, 0777) == -1) {
         perror("Error: Making Fifo");
         exit (1);
     }
-    if ((fAdv = open (server_pipename,O_WRONLY)) < 0) exit (-1);
-    if ((fClient = open (client_pipename,O_NONBLOCK)) < 0) exit (-1);
+    if ((fAdv = open (server_pipename,O_WRONLY)) == -1) {
+    	perror("Unexpected error while opening named pipe");
+        exit (-1); 
+    }
+    if ((fClient = open (client_pipename,O_RDONLY |O_NONBLOCK  )) == -1) {
+    	perror("Unexpected error while opening named pipe");
+        exit (-1); 
+    }
 	while (1) {
 		FD_ZERO(&fds);
         FD_SET(STDIN, &fds);
@@ -48,23 +55,41 @@ int main (int argc, char** argv) {
                 break;
             }
         }   
-
         if (FD_ISSET(STDIN, &fds)) { 
             fgets(text_buffer, 100, stdin);
-            write(fAdv, client_pipename, 50);
-			write(fAdv, text_buffer, TAMCMD);
+           	if (write(fAdv, client_pipename, 50) == -1) {
+     			perror("Unexpected error while writing in named pipe");
+           		exit(-1);
+           }
+			if(write(fAdv, text_buffer, TAMCMD)==-1) {
+				perror("Unexpected error while writing in named pipe");
+           		exit(-1);
+			}
 
         }
         if (FD_ISSET(fClient, &fds)) { 
-            if(read(fClient,text_buffer, 100)>0) {
-            printf("%s\n", text_buffer);
+        	int rd = read(fClient,text_buffer, 100);
+            if(rd > 0) {
+            	printf("%s\n", text_buffer);
+           }
+           else if( rd == -1) {
+           	if (errno !=EWOULDBLOCK) {
+           	perror("Unexpected error while reading from named pipe");
+           	exit(-1);
+           }
            }
         }
 
 		
 	}
-	close(fClient); 
-	unlink(client_pipename);
+	if(close(fClient) == -1) {
+        perror("Unexpected error while closing named pipe");
+        exit(-1);
+    }
+	if( unlink(client_pipename)==-1) {
+		 perror("Unexpected error while unlinking named pipe");
+        exit(EXIT_FAILURE);
+	}
 	free(text_buffer);
 	free(server_pipename);
 	exit(0);
