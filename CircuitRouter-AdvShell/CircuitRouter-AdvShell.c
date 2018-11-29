@@ -39,30 +39,6 @@ int runningChildren = 0;
 
 
 
-void waitForChild() {
-    while (1) {
-        child_t *child = malloc(sizeof(child_t));
-        if (child == NULL) {
-            perror("Error allocating memory");
-            exit(EXIT_FAILURE);
-        }
-        child->pid = wait(&(child->status));
-        if (child->pid < 0) {
-            if (errno == EINTR) {
-                 // Este codigo de erro significa que chegou signal que interrompeu a espera
-                 //   pela terminacao de filho; logo voltamos a esperar 
-                free(child);
-                continue;
-            } else {
-                perror("Unexpected error while waiting for child.");
-                exit (EXIT_FAILURE);
-            }
-        }
-        vector_pushBack(children, child);
-        return;
-    }
-}
-
 void printChildren() {
     for (int i = 0; i < vector_getSize(children); ++i) {
         child_t *child = vector_at(children, i);
@@ -74,7 +50,8 @@ void printChildren() {
             if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
                 ret = "OK";
             }
-            printf("CHILD EXITED: (PID=%d; return %s; %.0f s )\n", pid, ret, exec_time/100);
+            printf("CHILD EXITED: (PID=%d; return %s; %.0f s )\n", pid, ret, exec_time/100); 
+            //dividing the time by 100 to get the only the seconds
         }
     }
     puts("END.");
@@ -92,8 +69,8 @@ void childHandler(int sig, siginfo_t *info, void *ucontext)
         child->pid  = waitpid(-1, (&(child->status)), WNOHANG);
         if (child->pid < 0) {
             if (errno == EINTR) {
-                /* Este codigo de erro significa que chegou signal que interrompeu a espera
-                   pela terminacao de filho; logo voltamos a esperar */
+                /* This codes means that the signal that interrupts the wait for the child proccess
+                to finish has arrived, so we wait again */
                 free(child);
                 
             } else {
@@ -102,11 +79,12 @@ void childHandler(int sig, siginfo_t *info, void *ucontext)
             }
         }
         vector_pushBack(children, child);
-        child->exec_time= (info->si_utime);  // it is in hundreads of a second
+        child->exec_time= (info->si_utime);  // it is set in hundreads of a second
         runningChildren--;
 }
 
 void Handle_CTRLC(int sig) {
+    //unlinks the pipe when crtl+c is given as an input
     if (unlink("/tmp/CircuitRouter-AdvShell.pipe")==-1) {
         perror("Unexpected error while unlinking named pipe");
         exit(EXIT_FAILURE);
@@ -193,7 +171,7 @@ int main (int argc, char** argv) {
         strcpy(buffer, text_buffer);
         numArgs = readLineArguments(args, MAXARGS+1, buffer, BUFFER_SIZE,mode);
 
-        /* EOF (end of file) do stdin ou comando "sair" */
+        /* EOF (end of file) of the stdin or command "exit" */
         if (numArgs < 0 || (numArgs > 0 && (strcmp(args[0], COMMAND_EXIT) == 0))) {
             if (mode==2) {
                 if ((fClient = open (client_pipename,O_WRONLY)) == -1) {
@@ -213,7 +191,7 @@ int main (int argc, char** argv) {
             else {
             printf("CircuitRouter-AdvShell will exit.\n--\n");
 
-            /* Espera pela terminacao de cada filho */
+            /* Waits for the termination of every child process */
             while (runningChildren > 0) {
                 pause(); 
             }
@@ -264,6 +242,8 @@ int main (int argc, char** argv) {
             } else {
                 sprintf(string_mode, "%d", mode);
                 char seqsolver[] = "../CircuitRouter-SeqSolver/CircuitRouter-SeqSolver";
+                //passing to the SeqSolver the mode which indicates the origin of the command and
+                // the name of the time to which the message will be sent and
                 char *newArgs[5] = {seqsolver, args[1], client_pipename, string_mode,NULL};
                 execv(seqsolver, newArgs);
                 perror("Error while executing child process"); // Nao deveria chegar aqui
@@ -273,7 +253,7 @@ int main (int argc, char** argv) {
     
 
         else if (numArgs == 0){
-            /* Nenhum argumento; ignora e volta a pedir */
+            /* None parameter; ignores and asks again */
             continue;
         }
         else {
